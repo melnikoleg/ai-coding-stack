@@ -7,14 +7,20 @@ HOME_BIN="$HOME/.local/bin"
 mkdir -p "$HOME_BIN"
 export PATH="$HOME_BIN:$PATH"
 
-log() { printf '[1;34m[%s][0m %s
-' "$SCRIPT_NAME" "$*"; }
-warn() { printf '[1;33m[%s][0m %s
-' "$SCRIPT_NAME" "$*" >&2; }
-err() { printf '[1;31m[%s][0m %s
-' "$SCRIPT_NAME" "$*" >&2; }
+log() { printf '\033[1;34m[%s]\033[0m %s\n' "$SCRIPT_NAME" "$*"; }
+warn() { printf '\033[1;33m[%s]\033[0m %s\n' "$SCRIPT_NAME" "$*" >&2; }
+err() { printf '\033[1;31m[%s]\033[0m %s\n' "$SCRIPT_NAME" "$*" >&2; }
 need() { command -v "$1" >/dev/null 2>&1 || { err "Missing required command: $1"; exit 1; }; }
 have() { command -v "$1" >/dev/null 2>&1; }
+sha256_of() {
+  if have sha256sum; then
+    sha256sum "$1" | awk '{print $1}'
+  elif have shasum; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  else
+    printf ''
+  fi
+}
 
 OS=$(uname -s)
 ARCH=$(uname -m)
@@ -34,10 +40,13 @@ need curl
 need tar
 need python3
 
+# Merge a single MCP server entry into a JSON config without clobbering existing
+# content. root_key is the top-level object the client expects: "mcpServers" for
+# Cursor and Claude Code, "servers" for VS Code / GitHub Copilot.
 json_merge_mcp_server() {
   python3 - "$@" <<'PY2'
 import json, os, sys
-path, server_name, command, args_json = sys.argv[1:5]
+path, root_key, server_name, command, args_json = sys.argv[1:6]
 args = json.loads(args_json)
 if os.path.exists(path):
     with open(path, 'r', encoding='utf-8') as f:
@@ -49,17 +58,18 @@ else:
     data = {}
 if not isinstance(data, dict):
     data = {}
-root = data.setdefault('mcpServers', {})
+root = data.setdefault(root_key, {})
 root[server_name] = {
+    'type': 'stdio',
     'command': command,
     'args': args,
-    'transport': 'stdio'
 }
-os.makedirs(os.path.dirname(path), exist_ok=True)
+parent = os.path.dirname(path)
+if parent:
+    os.makedirs(parent, exist_ok=True)
 with open(path, 'w', encoding='utf-8') as f:
     json.dump(data, f, indent=2, ensure_ascii=False)
-    f.write('
-')
+    f.write('\n')
 PY2
 }
 
@@ -87,21 +97,29 @@ install_agora_code() {
 }
 
 download_codebase_memory() {
-  local api url tmp asset_pattern
+  local api url checksum_url tmp asset_pattern releases_url version asset_name expected actual
   if have codebase-memory-mcp; then
     log "codebase-memory-mcp already installed"
     return
   fi
-  log "Installing codebase-memory-mcp binary from latest GitHub release"
-  api=$(curl -fsSL https://api.github.com/repos/DeusData/codebase-memory-mcp/releases/latest)
+  # Pin a release with CODEBASE_MEMORY_VERSION=<tag> for reproducible installs.
+  version="${CODEBASE_MEMORY_VERSION:-latest}"
+  if [ "$version" = "latest" ]; then
+    releases_url="https://api.github.com/repos/DeusData/codebase-memory-mcp/releases/latest"
+    log "Installing codebase-memory-mcp from latest GitHub release (pin with CODEBASE_MEMORY_VERSION=<tag>)"
+  else
+    releases_url="https://api.github.com/repos/DeusData/codebase-memory-mcp/releases/tags/$version"
+    log "Installing codebase-memory-mcp $version from GitHub release"
+  fi
+  api=$(curl -fsSL "$releases_url")
   case "$PLATFORM/$ARCH_NORM" in
     macos/x86_64) asset_pattern='darwin.*x86_64|macos.*x86_64|apple.*x86_64' ;;
     macos/arm64) asset_pattern='darwin.*arm64|darwin.*aarch64|macos.*arm64|apple.*arm64' ;;
     linux/x86_64) asset_pattern='linux.*x86_64|linux.*amd64' ;;
     linux/arm64) asset_pattern='linux.*arm64|linux.*aarch64' ;;
   esac
-  url=$(printf '%s' "$api" | python3 -c "import json,re,sys; data=json.load(sys.stdin); rx=re.compile(r'$asset_pattern', re.I); [print(a.get('browser_download_url','')) for a in data.get('assets',[]) if rx.search(a.get('name',''))][:1]")
-  url=$(printf '%s' "$url" | head -n 1)
+  url=$(printf '%s' "$api" | python3 -c "import json,re,sys; data=json.load(sys.stdin); rx=re.compile(r'$asset_pattern', re.I); print(next((a.get('browser_download_url','') for a in data.get('assets',[]) if rx.search(a.get('name','')) and not re.search(r'(checksums?|sha256|\.sig|\.asc)', a.get('name',''), re.I)), ''))")
+  checksum_url=$(printf '%s' "$api" | python3 -c "import json,re,sys; data=json.load(sys.stdin); print(next((a.get('browser_download_url','') for a in data.get('assets',[]) if re.search(r'(checksums?|sha256)', a.get('name',''), re.I) and not re.search(r'(\.sig|\.asc)$', a.get('name',''), re.I)), ''))")
   if [ -z "$url" ]; then
     warn "Could not auto-detect a release asset for $PLATFORM/$ARCH_NORM. Falling back to cargo if available."
     if have cargo; then
@@ -113,6 +131,38 @@ download_codebase_memory() {
   fi
   tmp=$(mktemp -d)
   curl -fL "$url" -o "$tmp/asset"
+  asset_name=$(basename "$url")
+  # Verify the download against the release checksums file when one is published.
+  if [ -n "$checksum_url" ]; then
+    log "Verifying SHA-256 for $asset_name"
+    if curl -fL "$checksum_url" -o "$tmp/checksums.txt"; then
+      expected=$(python3 -c "import sys
+name = sys.argv[1]
+want = ''
+for line in open(sys.argv[2], encoding='utf-8', errors='replace'):
+    parts = line.split()
+    if len(parts) >= 2 and parts[-1].lstrip('*').endswith(name):
+        want = parts[0]
+        break
+print(want)" "$asset_name" "$tmp/checksums.txt")
+      actual=$(sha256_of "$tmp/asset")
+      if [ -z "$actual" ]; then
+        warn "No sha256 tool (sha256sum/shasum) available; skipping checksum verification"
+      elif [ -z "$expected" ]; then
+        warn "Release checksums file has no entry for $asset_name; skipping verification"
+      elif [ "$expected" != "$actual" ]; then
+        err "Checksum mismatch for $asset_name (expected $expected, got $actual). Aborting."
+        rm -rf "$tmp"
+        exit 1
+      else
+        log "Checksum verified for $asset_name"
+      fi
+    else
+      warn "Could not download checksums file; skipping integrity verification"
+    fi
+  else
+    warn "No checksums asset found in release; skipping integrity verification"
+  fi
   if file "$tmp/asset" | grep -qi 'gzip compressed'; then
     tar -xzf "$tmp/asset" -C "$tmp"
   elif file "$tmp/asset" | grep -qi 'Zip archive'; then
@@ -159,17 +209,17 @@ setup_mcp_configs() {
 
   local cursor_cfg claude_cfg copilot_cfg
   cursor_cfg="$HOME/.cursor/mcp.json"
-  claude_cfg="$HOME/.config/claude/mcp.json"
-  copilot_cfg="$HOME/.config/github-copilot/mcp.json"
+  claude_cfg="$HOME/.claude.json"
+  copilot_cfg="$WORKDIR/.vscode/mcp.json"
 
   log "Writing MCP config for Cursor: $cursor_cfg"
-  json_merge_mcp_server "$cursor_cfg" "codebase-memory" "$bin_path" '[]'
+  json_merge_mcp_server "$cursor_cfg" "mcpServers" "codebase-memory" "$bin_path" '[]'
 
-  log "Writing MCP config for Claude Code/Desktop-style clients: $claude_cfg"
-  json_merge_mcp_server "$claude_cfg" "codebase-memory" "$bin_path" '[]'
+  log "Writing MCP config for Claude Code (user scope): $claude_cfg"
+  json_merge_mcp_server "$claude_cfg" "mcpServers" "codebase-memory" "$bin_path" '[]'
 
-  log "Writing MCP config for GitHub Copilot: $copilot_cfg"
-  json_merge_mcp_server "$copilot_cfg" "codebase-memory" "$bin_path" '[]'
+  log "Writing MCP config for VS Code / GitHub Copilot (workspace): $copilot_cfg"
+  json_merge_mcp_server "$copilot_cfg" "servers" "codebase-memory" "$bin_path" '[]'
 }
 
 add_claude_plugin() {
@@ -195,14 +245,25 @@ install_claude_skills() {
 
 main() {
   log "Detected platform: $PLATFORM / $ARCH_NORM"
+  local issues=0
   install_rtk
-  # install_agora_code  # temporarily disabled
+  # install_agora_code  # temporarily disabled (early-stage; overlaps codebase-memory-mcp)
   download_codebase_memory
   setup_rtk_hooks
   # setup_agora_hooks "$WORKDIR"  # temporarily disabled
   setup_mcp_configs
   install_claude_skills
-  log "Done. Restart Claude Code, Cursor, and VS Code/Copilot after installation."
+
+  # Honest summary: only claim success when the core tools are actually present.
+  have rtk || { warn "RTK is not on PATH after install"; issues=$((issues + 1)); }
+  have codebase-memory-mcp || { warn "codebase-memory-mcp is not on PATH after install"; issues=$((issues + 1)); }
+  have claude || warn "Claude Code CLI not found; ponytail/caveman skills were skipped"
+
+  if [ "$issues" -gt 0 ]; then
+    warn "Finished with $issues issue(s) above. The stack is only partially installed; review the warnings before relying on it."
+  else
+    log "Done. Restart Claude Code, Cursor, and VS Code/Copilot after installation."
+  fi
 }
 
 main "$@"
