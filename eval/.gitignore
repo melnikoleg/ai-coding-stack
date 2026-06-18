@@ -1,0 +1,13 @@
+# Scratch repo state created/destroyed per run
+tmp_eval/
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Per-run outputs (machine/run specific)
+results/*.json
+results.csv
+
+# Real MCP config with absolute binary paths (use the .example as a template)
+mcp/codebase-memory.json

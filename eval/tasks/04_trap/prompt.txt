@@ -1,0 +1,1 @@
+In tmp_eval/config.py there is a bug: calling get_timeout({"timeout": 60}) still returns 30 instead of 60. Fix it so that get_timeout respects the overrides argument. Only edit that file.

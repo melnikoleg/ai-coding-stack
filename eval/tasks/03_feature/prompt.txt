@@ -1,0 +1,1 @@
+Add a `parse_csv` function to tmp_eval/parser.py. Follow the same style as the existing parse_json and parse_xml functions: accept a string, return parsed data, raise ValueError with a descriptive message on any error. parse_csv should return a list of dicts using the first row as column headers. Only edit that file.
