@@ -172,6 +172,27 @@ setup_mcp_configs() {
   json_merge_mcp_server "$copilot_cfg" "codebase-memory" "$bin_path" '[]'
 }
 
+add_claude_plugin() {
+  local repo=$1 plugin_ref=$2
+  log "Adding marketplace: $repo"
+  claude plugin marketplace add "$repo" || warn "marketplace add failed for $repo (may already be registered)"
+  log "Installing plugin: $plugin_ref"
+  claude plugin install "$plugin_ref" || warn "plugin install failed for $plugin_ref (may already be installed)"
+}
+
+install_claude_skills() {
+  if ! have claude; then
+    warn "Claude Code CLI ('claude') not found on PATH; skipping skill plugins (ponytail, caveman)."
+    warn "After installing Claude Code, add them manually:"
+    warn "  claude plugin marketplace add DietrichGebert/ponytail && claude plugin install ponytail@ponytail"
+    warn "  claude plugin marketplace add JuliusBrussee/caveman && claude plugin install caveman@caveman"
+    return
+  fi
+  log "Installing Claude Code skill plugins (ponytail, caveman)"
+  add_claude_plugin "DietrichGebert/ponytail" "ponytail@ponytail"
+  add_claude_plugin "JuliusBrussee/caveman" "caveman@caveman"
+}
+
 main() {
   log "Detected platform: $PLATFORM / $ARCH_NORM"
   install_rtk
@@ -180,6 +201,7 @@ main() {
   setup_rtk_hooks
   setup_agora_hooks "$WORKDIR"
   setup_mcp_configs
+  install_claude_skills
   log "Done. Restart Claude Code, Cursor, and VS Code/Copilot after installation."
 }
 
