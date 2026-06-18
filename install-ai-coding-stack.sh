@@ -196,10 +196,10 @@ install_claude_skills() {
 main() {
   log "Detected platform: $PLATFORM / $ARCH_NORM"
   install_rtk
-  install_agora_code
+  # install_agora_code  # temporarily disabled
   download_codebase_memory
   setup_rtk_hooks
-  setup_agora_hooks "$WORKDIR"
+  # setup_agora_hooks "$WORKDIR"  # temporarily disabled
   setup_mcp_configs
   install_claude_skills
   log "Done. Restart Claude Code, Cursor, and VS Code/Copilot after installation."
