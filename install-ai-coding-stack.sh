@@ -172,14 +172,85 @@ setup_mcp_configs() {
   json_merge_mcp_server "$copilot_cfg" "codebase-memory" "$bin_path" '[]'
 }
 
+add_claude_plugin() {
+  local repo=$1 plugin_ref=$2
+  log "Adding marketplace: $repo"
+  claude plugin marketplace add "$repo" || warn "marketplace add failed for $repo (may already be registered)"
+  log "Installing plugin: $plugin_ref"
+  claude plugin install "$plugin_ref" || warn "plugin install failed for $plugin_ref (may already be installed)"
+}
+
+node_ge_18() {
+  have node || return 1
+  [ "$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)" -ge 18 ]
+}
+
+# ponytail has no multi-editor installer; for non-Claude editors it ships
+# always-on rule files that get copied into the target repo.
+copy_ponytail_rules() {
+  local target=$1 tmp d
+  have git || { warn "git missing; skipping ponytail rule files (Cursor/Windsurf/Cline/Copilot)"; return; }
+  tmp=$(mktemp -d)
+  if ! git clone --depth 1 https://github.com/DietrichGebert/ponytail.git "$tmp/p" >/dev/null 2>&1; then
+    warn "clone ponytail failed; skipping rule files"
+    rm -rf "$tmp"
+    return
+  fi
+  for d in .cursor/rules .windsurf/rules .clinerules; do
+    [ -d "$tmp/p/$d" ] || continue
+    mkdir -p "$target/$d"
+    cp -Rn "$tmp/p/$d/." "$target/$d/" 2>/dev/null || true
+    log "ponytail rules -> $target/$d"
+  done
+  if [ -f "$tmp/p/.github/copilot-instructions.md" ]; then
+    mkdir -p "$target/.github"
+    if [ -e "$target/.github/copilot-instructions.md" ]; then
+      warn ".github/copilot-instructions.md exists; left as-is (merge ponytail manually)"
+    else
+      cp "$tmp/p/.github/copilot-instructions.md" "$target/.github/copilot-instructions.md"
+      log "ponytail rules -> $target/.github/copilot-instructions.md"
+    fi
+  fi
+  rm -rf "$tmp"
+}
+
+install_ponytail() {
+  if have claude; then
+    log "Installing ponytail for Claude Code"
+    add_claude_plugin "DietrichGebert/ponytail" "ponytail@ponytail"
+  else
+    warn "claude not on PATH; skipping ponytail Claude Code plugin"
+    warn "  manual: claude plugin marketplace add DietrichGebert/ponytail && claude plugin install ponytail@ponytail"
+  fi
+  copy_ponytail_rules "$WORKDIR"
+}
+
+# caveman's official installer auto-detects every supported editor (Claude Code,
+# Cursor, Windsurf, Copilot, ...) and runs each one's native install path.
+install_caveman() {
+  if have npx && node_ge_18; then
+    log "Installing caveman for all detected editors (official installer)"
+    # --with-init also writes per-repo Cursor/Windsurf/Cline/Copilot rule files into $WORKDIR.
+    (cd "$WORKDIR" && npx -y github:JuliusBrussee/caveman --non-interactive --with-init) || warn "caveman installer failed"
+  elif have claude; then
+    warn "Node >=18 missing; installing caveman for Claude Code only"
+    add_claude_plugin "JuliusBrussee/caveman" "caveman@caveman"
+  else
+    warn "No Node >=18 or claude CLI; skipping caveman"
+    warn "  manual (all editors): curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.sh | bash"
+  fi
+}
+
 main() {
   log "Detected platform: $PLATFORM / $ARCH_NORM"
   install_rtk
-  install_agora_code
+  # install_agora_code  # temporarily disabled
   download_codebase_memory
   setup_rtk_hooks
-  setup_agora_hooks "$WORKDIR"
+  # setup_agora_hooks "$WORKDIR"  # temporarily disabled
   setup_mcp_configs
+  install_ponytail
+  install_caveman
   log "Done. Restart Claude Code, Cursor, and VS Code/Copilot after installation."
 }
 
