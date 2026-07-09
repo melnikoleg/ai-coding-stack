@@ -12,12 +12,16 @@ guesswork.
 
 ## Preflight (always)
 
-1. Verify the `codebase-memory` MCP tools are available (e.g. `list_projects`).
-   If they are not, STOP and tell the user to install the stack
+1. Verify the `codebase-memory` MCP tools are available. If they are not,
+   STOP and tell the user to install the stack
    (https://github.com/melnikoleg/ai-coding-stack, `install-ai-coding-stack.sh`)
    or check their MCP config. Do NOT write the document without the graph.
-2. Call `index_repository` on this project's root directory, then poll
-   `index_status` until indexing completes.
+2. Call `index_repository` with `repo_path` = absolute project root and
+   `name` = the repo directory name. In current server versions the call is
+   synchronous and returns `status: "indexed"`; if your server version also
+   exposes `index_status`, poll it until indexing completes.
+3. Every other tool requires a `project` parameter — pass the project name
+   returned by `index_repository`.
 
 ## Mode selection
 
@@ -35,19 +39,24 @@ Otherwise use **incremental mode** with `BASE = <marker commit>`.
 
 Gather data in this order:
 
-1. `get_architecture` — languages, packages, module clusters, HTTP routes.
-   This feeds most sections.
-2. Entry points: `search_graph` for Route nodes and for Function/Method nodes
-   with names matching `main|cli|handler|serve|app|start|run`. If the result
-   is thin, supplement with one `query_graph` query for public functions with
-   zero incoming CALLS in the largest clusters. Keep at most 15 entries.
-3. Module dependencies: `query_graph` with a Cypher query like
-   `MATCH (a:Module)-[:IMPORTS]->(b:Module) RETURN a.name, b.name`. If the
+1. `get_architecture` — one call returns `languages`, `packages`,
+   `entry_points`, `routes`, `hotspots`, `boundaries` (module→module call
+   counts), `layers`, `clusters`, and `file_tree`. This feeds most sections.
+2. Entry points: start from `entry_points` in the `get_architecture` result.
+   If thin, supplement with `search_graph` for Route nodes and for
+   Function/Method nodes named `main|cli|handler|serve|app|start|run`. Keep
+   at most 15 entries.
+3. Module dependencies for the diagram: use `boundaries` from
+   `get_architecture` (edges labelled with call counts). For import detail,
+   `query_graph` with `MATCH (a:File)-[:IMPORTS]->(b:File) RETURN a.name,
+   b.name` — note IMPORTS edges connect File nodes, not Module nodes. If the
    project has more than ~25 modules, aggregate edges to cluster level (one
-   diagram node per cluster, edge labels = import counts).
-4. Dead code: `search_graph` for Function/Method nodes with zero incoming
-   CALLS edges. Exclude tests, exported/public API symbols, and anything
-   already listed as an entry point. Keep at most 30 rows.
+   diagram node per cluster).
+4. Dead code: `search_graph` with `label: "Function"`, `max_degree: 0` (and
+   again for `Method`), `limit: 30`. From the results DROP: symbols whose
+   `file_path` is outside the repo (e.g. `<python-builtins>`), `is_test:
+   true`, and `is_entry_point: true`. Flag `is_exported: true` rows as
+   "public API — verify before removal". Keep at most 30 rows.
 
 Then write `ARCHITECTURE.md` with exactly this structure:
 
@@ -76,8 +85,13 @@ output into the marker as the FIRST line of the file:
 
 ## Incremental mode
 
-1. Call `detect_changes` with `base = <marker commit>` to map the diff to
-   affected symbols/files/modules.
+1. Map the diff since the marker to affected symbols/files/modules:
+   - if the server exposes a `detect_changes` tool, call it with
+     `base = <marker commit>`;
+   - otherwise (e.g. server v0.9.x): run
+     `git diff --name-only <marker commit>` and, for each changed source
+     file, `search_graph` with `file_pattern: "<path>"` to list its symbols
+     and modules.
 2. If the affected set is empty (only non-source churn), just refresh the
    marker line (run `bash .claude/hooks/arch-doc-state.sh` with no arguments)
    and report "no architecture-relevant changes".
@@ -94,7 +108,8 @@ output into the marker as the FIRST line of the file:
 5. Refresh the marker line: run `bash .claude/hooks/arch-doc-state.sh` (no
    arguments) and replace the first line of `ARCHITECTURE.md` with its output.
 
-If `detect_changes` errors or behaves unexpectedly, fall back to full mode.
+If the change-mapping step errors or behaves unexpectedly, fall back to full
+mode.
 
 ## Rules
 

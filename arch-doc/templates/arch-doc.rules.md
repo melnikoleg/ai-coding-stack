@@ -9,7 +9,9 @@ This repository maintains a generated `ARCHITECTURE.md` built from the
 After you change source files in a session:
 
 1. Call the `codebase-memory` MCP tool `index_repository` on this project,
-   then `detect_changes` with `base=<marker commit>` to find affected symbols.
+   then find affected symbols: `detect_changes` with `base=<marker commit>`
+   if your server has it, otherwise `git diff --name-only <marker commit>`
+   plus `search_graph` with `file_pattern` per changed source file.
 2. Update only the affected sections of `ARCHITECTURE.md`, following the full
    procedure in `.claude/commands/architecture.md` (same file works as a
    plain instruction document for any agent).

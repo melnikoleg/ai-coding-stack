@@ -9,7 +9,7 @@ knowledge graph, and keeps that document fresh automatically.
 
 | File | Purpose |
 | --- | --- |
-| `.claude/commands/architecture.md` | `/architecture` slash command: full or incremental (re)generation of the doc from graph data (`get_architecture`, `search_graph`, `query_graph`, `detect_changes`) |
+| `.claude/commands/architecture.md` | `/architecture` slash command: full or incremental (re)generation of the doc from graph data (`get_architecture`, `search_graph`, `query_graph`, plus `detect_changes` on server versions that have it) |
 | `.claude/hooks/arch-doc-stop-hook.sh` | Claude Code Stop hook: at the end of a session that edited source files, blocks once with instructions to update the stale doc incrementally |
 | `.claude/hooks/arch-doc-state.sh` | Shared helper that fingerprints the current source state (used by the marker and the hook) |
 | `.claude/settings.json` | Gets the Stop hook appended (existing content is preserved; a malformed file is never overwritten) |
@@ -19,8 +19,9 @@ knowledge graph, and keeps that document fresh automatically.
 ## Install
 
 Prerequisites: `git`, `python3`, and ideally `codebase-memory-mcp` on PATH
-(installed by the main `install-ai-coding-stack.sh`; without it the files are
-installed but inert).
+(installed by the main `install-ai-coding-stack.sh`, or via
+`npm install -g codebase-memory-mcp` / `pip install codebase-memory-mcp`;
+without it the files are installed but inert).
 
 ```bash
 # from a clone of this repo, inside your project:
@@ -55,8 +56,9 @@ MCP calls — checks, in order: the session actually edited files (read-only
 sessions are never interrupted); the doc exists and has a valid marker (the
 hook maintains a doc, it never demands creating one); the current source
 state differs from the marker. Only then does it block the stop once, telling
-the agent to run `detect_changes` against the marker's commit, patch only the
-affected sections, and write a fresh marker. Loop safety: `stop_hook_active`
+the agent to map the diff since the marker's commit to affected symbols
+(`detect_changes` where available, else `git diff` + `search_graph`
+`file_pattern`), patch only the affected sections, and write a fresh marker. Loop safety: `stop_hook_active`
 guarantees at most one block per stop cycle, and any internal hook failure
 falls through to "allow".
 
