@@ -39,11 +39,15 @@ Otherwise use **incremental mode** with `BASE = <marker commit>`.
 
 Gather data in this order:
 
-1. `get_architecture` — one call returns `languages`, `packages`,
-   `entry_points`, `routes`, `hotspots`, `boundaries` (module→module call
-   counts), `layers`, `clusters`, and `file_tree`. This feeds most sections.
+1. `get_architecture` with
+   `aspects: ["languages", "packages", "entry_points", "routes",
+   "boundaries", "layers", "clusters", "hotspots"]` — this skips the large
+   `file_tree` aspect (~10x smaller output on big repos; verified ~1.8k vs
+   ~16k tokens on a 500k-LOC project). If the server rejects `aspects`, call
+   it plain. `boundaries` = module→module call counts; some aspects (e.g.
+   `entry_points`) may be absent on large projects — tolerate missing keys.
 2. Entry points: start from `entry_points` in the `get_architecture` result.
-   If thin, supplement with `search_graph` for Route nodes and for
+   If thin or absent, supplement with `search_graph` for Route nodes and for
    Function/Method nodes named `main|cli|handler|serve|app|start|run`. Keep
    at most 15 entries.
 3. Module dependencies for the diagram: use `boundaries` from
@@ -55,8 +59,18 @@ Gather data in this order:
 4. Dead code: `search_graph` with `label: "Function"`, `max_degree: 0` (and
    again for `Method`), `limit: 30`. From the results DROP: symbols whose
    `file_path` is outside the repo (e.g. `<python-builtins>`), `is_test:
-   true`, and `is_entry_point: true`. Flag `is_exported: true` rows as
-   "public API — verify before removal". Keep at most 30 rows.
+   true`, paths under test/docs directories (`tests/`, `test/`, `docs/`,
+   `examples/` — `is_test` alone misses fixtures), non-code files
+   (Makefiles, configs), and `is_entry_point: true`. Flag `is_exported:
+   true` rows as "public API — verify before removal". Keep at most 30 rows.
+
+**Noise filtering (matters on large repos — verified on Django):** before
+writing any section, drop graph entries that are language builtins rather
+than project modules (`len`, `str`, `list`, `dict`, `int`, `append`, … —
+recognizable by a `file_path` outside the repo or a bare builtin name in
+`boundaries`/`hotspots`/`layers`); ignore clusters whose members live under
+test directories; ignore routes defined in test fixtures. The document
+describes the shipped system, not the test suite.
 
 Then write `ARCHITECTURE.md` with exactly this structure:
 
