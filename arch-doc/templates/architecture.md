@@ -50,11 +50,21 @@ Gather data in this order:
    If thin or absent, supplement with `search_graph` for Route nodes and for
    Function/Method nodes named `main|cli|handler|serve|app|start|run`. Keep
    at most 15 entries.
-3. Module dependencies for the diagram: use `boundaries` from
-   `get_architecture` (edges labelled with call counts). For import detail,
-   `query_graph` with `MATCH (a:File)-[:IMPORTS]->(b:File) RETURN a.name,
-   b.name` — note IMPORTS edges connect File nodes, not Module nodes. If the
-   project has more than ~25 modules, aggregate edges to cluster level (one
+3. Module dependencies for the diagram: start from `boundaries` in
+   `get_architecture` (call-count edges, but only the top ~10 — too coarse
+   for a large repo). Augment with import edges via `query_graph`:
+
+   ```
+   MATCH (a:File)-[:IMPORTS]->(b:Module) RETURN a.file_path, b.name
+   ```
+
+   with `max_rows: 5000`. IMPORTS edges connect File → Module nodes;
+   label-free patterns like `()-[:IMPORTS]->()` return empty on large
+   indexes, so keep the labels exactly as above. Aggregate the returned
+   file-level rows yourself to top-level modules (e.g. first two path
+   segments), drop self-edges, test/docs paths and builtins, then keep the
+   top ~25 edges by count for the mermaid diagram. If the project has more
+   than ~25 modules even after aggregation, collapse to cluster level (one
    diagram node per cluster).
 4. Dead code: `search_graph` with `label: "Function"`, `max_degree: 0` (and
    again for `Method`), `limit: 30`. From the results DROP: symbols whose
