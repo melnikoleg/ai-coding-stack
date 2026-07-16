@@ -16,6 +16,19 @@ chmod +x ./install-ai-coding-stack.sh
 ./install-ai-coding-stack.sh
 ```
 
+## arch-doc: self-updating ARCHITECTURE.md
+
+A standalone add-on (not part of the main installer) that gives a project a
+generated `ARCHITECTURE.md` built from the `codebase-memory` knowledge graph,
+plus a `/architecture` Claude Code command and a Stop hook that keeps the
+document fresh after sessions that change code. Install it per project:
+
+```bash
+./arch-doc/install.sh ~/work/my-project
+```
+
+See [arch-doc/README.md](arch-doc/README.md) for details.
+
 ## Notes
 
 - Run the script from the repository where you want `agora-code` hooks installed.
